@@ -220,6 +220,8 @@ subprocess_weak int subprocess_alive(struct subprocess_s *const process);
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+subprocess_weak int subprocess_execvpe(const char *file, char *const argv[], char *const envp[]);
 #endif
 
 #if defined(_MSC_VER)
@@ -721,8 +723,10 @@ int subprocess_create_ex(const char *const commandLine[], int options,
   int stdoutfd[2];
   int stderrfd[2];
   pid_t child;
-  extern char** environ;
   char *const empty_environment[1] = {SUBPROCESS_NULL};
+  char *const *final_environment = SUBPROCESS_NULL;
+  int search_user_path = (subprocess_option_search_user_path ==
+                          (options & subprocess_option_search_user_path));
 
   if (subprocess_option_inherit_environment ==
       (options & subprocess_option_inherit_environment)) {
@@ -780,18 +784,30 @@ int subprocess_create_ex(const char *const commandLine[], int options,
 #endif
 
     if (environment) {
-      environ = (char **)environment;
+      final_environment = (char *const *)environment;
+    } else if (subprocess_option_inherit_environment !=
+               (options & subprocess_option_inherit_environment)) {
+      final_environment = empty_environment;
     }
-    else if (subprocess_option_inherit_environment != 
-             (options & subprocess_option_inherit_environment)) {
-      environ = (char **)empty_environment;
+    
+    if (final_environment) {
+      if (search_user_path) {
+        _Exit(subprocess_execvpe(commandLine[0], (char *const *)commandLine,
+                    (char *const *)final_environment));
+      }
+      else {
+        _Exit(execve(commandLine[0], (char *const *)commandLine,
+                    (char *const *)final_environment));
+      }
     }
-
-    if (subprocess_option_search_user_path == (options & subprocess_option_search_user_path)) {
-      _Exit(execvp(commandLine[0], (char *const *)commandLine));  
-    }
-    else {
-      _Exit(execv(commandLine[0], (char *const *)commandLine));
+    else
+    {
+      if (search_user_path) {
+        _Exit(execvp(commandLine[0], (char *const *)commandLine));
+      }
+      else {
+        _Exit(execv(commandLine[0], (char *const *)commandLine));
+      }
     }
 
 #ifdef __clang__
@@ -1094,6 +1110,51 @@ int subprocess_alive(struct subprocess_s *const process) {
 
   return is_alive;
 }
+
+#if !defined(MSC_VER)
+#include <errno.h>
+#include <string.h>
+#include <limits.h>
+
+// execvpe is GNU_SOURCE only, so adapted this version from musl
+// https://github.com/esmil/musl/blob/master/src/process/execvp.c
+subprocess_weak int subprocess_execvpe(const char *file, char *const argv[], char *const envp[])
+{
+	const char *p, *z, *path = getenv("PATH");
+	size_t l, k;
+
+	errno = ENOENT;
+	if (!*file) return -1;
+
+	if (strchr(file, '/'))
+		return execve(file, argv, envp);
+
+	if (!path) path = "/usr/local/bin:/bin:/usr/bin";
+	k = strnlen(file, NAME_MAX+1);
+	if (k > NAME_MAX) {
+		errno = ENAMETOOLONG;
+		return -1;
+	}
+	l = strnlen(path, PATH_MAX-1)+1;
+
+	char b[PATH_MAX+NAME_MAX+2];
+  for(p=path; ; p=z) {
+		z = strchr(p, ':');
+		if (!z) z = p+strlen(p);
+		if (z-p >= (ssize_t)l) {
+			if (!*z++) break;
+			continue;
+		}
+		memcpy(b, p, z-p);
+		b[z-p] = '/';
+		memcpy(b+(z-p)+(z>p), file, k+1);
+		execve(b, argv, envp);
+		if (errno != ENOENT) return -1;
+		if (!*z++) break;
+	}
+	return -1;
+}
+#endif
 
 #if defined(__cplusplus)
 } // extern "C"

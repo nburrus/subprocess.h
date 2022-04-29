@@ -809,7 +809,7 @@ UTEST(executable_resolve, no_slashes_with_inherit) {
 UTEST(executable_resolve, custom_search_path) {
   char current_path[4096];
   char path_var[4096 + 5];
-  const char *environment[2] = {0 /* placeholder */, 0};
+  const char *custom_environment[2] = {0 /* placeholder */, 0};
   const char *const commandLine[] = {"process_return_argc", "onearg", 0};
   struct subprocess_s process;
   int ret = -1;
@@ -821,11 +821,17 @@ UTEST(executable_resolve, custom_search_path) {
 
   // Set the PATH=current_path env variable
   snprintf (path_var, sizeof(path_var), "PATH=%s", current_path);
-  environment[0] = path_var;
+  custom_environment[0] = path_var;
+
+  extern char** environ;
+  char** prev_environ = environ;
+  environ = (char**)custom_environment;
 
   ASSERT_EQ(0, subprocess_create_ex(commandLine, 
                                     subprocess_option_search_user_path, 
-                                    environment, &process));
+                                    0, &process));
+
+  environ = prev_environ;
 
   ASSERT_EQ(0, subprocess_join(&process, &ret));
 
